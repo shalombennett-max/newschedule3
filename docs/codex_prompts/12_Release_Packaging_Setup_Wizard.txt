@@ -1,0 +1,241 @@
+You are Codex working in this repository (the scheduler is a standalone PHP app with its own database).
+
+READ FIRST:
+- Follow AGENTS.md strictly if present.
+- Do NOT refactor unrelated code. Prefer new files.
+- Use PDO prepared statements only.
+- All auth must be secure: password_hash/password_verify, CSRF, rate limiting, one-time reset tokens.
+
+GOAL:
+Implement a complete login system for this standalone scheduler app:
+- manager + team member roles
+- registration (manager creates the restaurant)
+- team member invite flow
+- login/logout
+- forgot password + password reset (email link)
+- basic access control helpers
+- premium, consistent UI (reuse existing schedule.css if present)
+
+ASSUMPTIONS:
+- This app has its own db.php pointing to the scheduler database.
+- This app is hosted under HTTPS.
+- Email sending can start with PHP mail() and be swapped later (wrap it in one function).
+
+========================================================
+1) DATABASE MIGRATIONS (additive)
+========================================================
+Create migrations under /migrations:
+
+/migrations/040_auth_core.sql
+- users:
+  - id PK
+  - email varchar(190) unique
+  - name varchar(120)
+  - password_hash varchar(255)
+  - is_active tinyint default 1
+  - email_verified tinyint default 0
+  - last_login_at datetime nullable
+  - failed_logins int default 0
+  - locked_until datetime nullable
+  - created_at datetime
+  - updated_at datetime nullable
+  Index: (email)
+
+/migrations/041_restaurants_memberships.sql
+- restaurants:
+  - id PK
+  - name varchar(140)
+  - created_by int (users.id)
+  - created_at datetime
+- user_restaurants:
+  - id PK
+  - restaurant_id
+  - user_id
+  - role enum('manager','team') default 'team'
+  - is_active tinyint default 1
+  - created_at datetime
+  Unique: (restaurant_id, user_id)
+  Index: (user_id), (restaurant_id)
+
+/migrations/042_password_resets.sql
+- password_resets:
+  - id PK
+  - user_id
+  - token_hash char(64)   -- sha256 hex of raw token
+  - expires_at datetime
+  - used_at datetime nullable
+  - request_ip varchar(64) nullable
+  - created_at datetime
+  Index: (user_id), (expires_at), (token_hash)
+
+/migrations/043_invites.sql
+- invites:
+  - id PK
+  - restaurant_id
+  - email varchar(190)
+  - role enum('manager','team') default 'team'
+  - token_hash char(64)
+  - expires_at datetime
+  - accepted_at datetime nullable
+  - created_by int
+  - created_at datetime
+  Unique: (restaurant_id, email, accepted_at)  -- allow multiple invites over time
+  Index: (restaurant_id), (email), (token_hash)
+
+If schedule tables use restaurant_id already, keep consistent naming.
+
+========================================================
+2) CONFIG + MAILER (single place)
+========================================================
+Create:
+- /config.php
+  - APP_NAME
+  - APP_URL (base URL, used to build links)
+  - MAIL_FROM, MAIL_FROM_NAME
+  - SUPPORT_EMAIL
+
+Create:
+- /lib/mailer.php
+  - function app_send_mail($to, $subject, $htmlBody, $textBody=''): bool
+  Use mail() for now with proper headers; return true/false.
+
+Create:
+- /lib/security.php
+  - csrf helpers:
+    - csrf_get_token()
+    - csrf_field_html()
+    - csrf_validate_or_die()
+  - rate limit helpers:
+    - login_lock_check($userRow)
+    - login_fail_record($userId)
+    - login_success_record($userId)
+  - token helpers:
+    - make_token_raw() using random_bytes(32) -> bin2hex
+    - hash_token($raw) -> hash('sha256', $raw)
+
+========================================================
+3) AUTH HELPERS + ACCESS CONTROL
+========================================================
+Create:
+- /lib/auth.php
+Functions:
+- require_login(): redirects to /auth/login.php?next=...
+- current_user(): returns user row or null
+- current_restaurant_id(): from session
+- is_manager(): true if membership role=manager for current restaurant
+- require_manager(): 403 page or redirect
+
+Session structure:
+- $_SESSION['user_id']
+- $_SESSION['restaurant_id']
+- regenerate session id on login
+
+========================================================
+4) AUTH PAGES (premium UI, mobile-first)
+========================================================
+Create folder: /auth/
+
+Pages:
+- /auth/login.php
+  - email + password
+  - link to forgot password
+  - POST -> verify -> set session -> redirect next or /schedule/index.php
+  - on too many fails -> lock account temporarily (e.g. 10 min)
+
+- /auth/register.php  (Manager onboarding)
+  - restaurant name
+  - manager name
+  - email
+  - password
+  - creates:
+    - users row
+    - restaurants row
+    - user_restaurants row with role='manager'
+    - logs in automatically
+  - optional: set email_verified=1 (for MVP) but structure code so we can turn on verification later
+
+- /auth/logout.php
+  - destroys session, redirects login
+
+- /auth/forgot.php
+  - email input
+  - always show generic success message (do not reveal if account exists)
+  - if user exists:
+    - create password_resets row with token_hash, expires_at (60 minutes)
+    - email reset link: APP_URL . "/auth/reset.php?token=RAW"
+  - rate-limit reset requests (per email/ip basic)
+
+- /auth/reset.php
+  - token in query
+  - user sets new password
+  - verify token:
+    - hash token and match unused, unexpired record
+  - update users.password_hash
+  - set used_at on reset row
+  - force logout other sessions by regenerating session id on next login (minimal)
+  - redirect to login with success
+
+- /auth/invite_accept.php
+  - token in query
+  - asks for name + password
+  - creates user if not exists (or links if exists)
+  - creates membership in user_restaurants with role from invite
+  - marks invite accepted_at
+  - logs user in and sets restaurant_id
+
+UI requirements:
+- Use existing schedule.css if present for consistent premium look.
+- Forms: readable, big inputs, clear errors, no clutter.
+- Must work on mobile.
+- Include CSRF tokens in all POST forms.
+
+========================================================
+5) MANAGER TEAM MANAGEMENT (invites)
+========================================================
+Create:
+- /team/index.php (manager-only)
+Features:
+- list current team members for restaurant
+- invite form (email + role dropdown [manager/team])
+- create invite:
+  - token_raw + token_hash
+  - store invite row with expires_at (7 days)
+  - send email with accept link: /auth/invite_accept.php?token=RAW
+- deactivate member (set user_restaurants.is_active=0)
+
+Add link to this page in schedule nav for managers.
+
+========================================================
+6) INTEGRATE WITH SCHEDULE PAGES
+========================================================
+Update /schedule/*.php:
+- include require_login() at top
+- set $restaurantId = current_restaurant_id()
+- use require_manager() for manager pages (roles, compliance, rules, integrations imports, etc.)
+Do NOT change schedule logic besides replacing direct session checks with helper calls, and only if necessary.
+
+========================================================
+7) ERROR PAGES (clean)
+========================================================
+Create:
+- /403.php and /404.php (simple premium UI)
+Use them for forbidden or missing resources.
+
+========================================================
+8) VERIFICATION (REQUIRED)
+========================================================
+- php -l on all new/edited PHP files.
+- Manual tests:
+  1) Register manager -> creates restaurant -> redirects to schedule
+  2) Logout/login works
+  3) Forgot password sends email (or logs the link if mail disabled) and reset works
+  4) Manager invites team -> team accepts -> logs in -> sees my schedule
+  5) Team member cannot access manager pages (roles, publish, invites)
+  6) Rate limiting: repeated wrong login locks temporarily
+
+STOP CONDITION:
+- Auth system works end-to-end.
+- Roles (manager/team) enforced.
+- Reset + invite flows work.
+- Premium UI applied.
+- No unrelated refactors.

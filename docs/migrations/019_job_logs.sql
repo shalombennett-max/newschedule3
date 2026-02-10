@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS job_locks (
+  lock_key VARCHAR(128) NOT NULL PRIMARY KEY,
+  locked_at DATETIME NOT NULL,
+  expires_at DATETIME NOT NULL,
+  owner VARCHAR(64) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

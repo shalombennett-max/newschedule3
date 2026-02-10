@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS schedule_settings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  restaurant_id INT NOT NULL UNIQUE,
+  timezone VARCHAR(64) NOT NULL DEFAULT 'America/New_York',
+  demo_mode TINYINT(1) NOT NULL DEFAULT 0,
+  last_worker_run_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

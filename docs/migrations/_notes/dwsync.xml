@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<dwsync>
+<file name="001_roles.sql" server="66.29.132.156/schedule/" local="134150670177100527" remote="134151781800000000" Dst="1" />
+<file name="002_staff_availability.sql" server="66.29.132.156/schedule/" local="134150665171985581" remote="134151781800000000" Dst="1" />
+<file name="003_shifts.sql" server="66.29.132.156/schedule/" local="134150665172005613" remote="134151781800000000" Dst="1" />
+<file name="004_time_off_requests.sql" server="66.29.132.156/schedule/" local="134150665172025604" remote="134151781800000000" Dst="1" />
+<file name="005_staff_skills.sql" server="66.29.132.156/schedule/" local="134150665300598757" remote="134151781800000000" Dst="1" />
+<file name="006_staff_pay_rates.sql" server="66.29.132.156/schedule/" local="134150666136535844" remote="134151781800000000" Dst="1" />
+<file name="008_shift_pickup_requests.sql" server="66.29.132.156/schedule/" local="134150666839536929" remote="134151781800000000" Dst="1" />
+<file name="009_announcements.sql" server="66.29.132.156/schedule/" local="134150667458677614" remote="134151781800000000" Dst="1" />
+<file name="010_schedule_quality.sql" server="66.29.132.156/schedule/" local="134150668183821928" remote="134151781200000000" Dst="1" />
+<file name="011_pos_connections.sql" server="66.29.132.156/schedule/" local="134150668791526670" remote="134151781200000000" Dst="1" />
+<file name="012_pos_mappings.sql" server="66.29.132.156/schedule/" local="134150669412645157" remote="134151781200000000" Dst="1" />
+<file name="013_aloha_import_batches.sql" server="66.29.132.156/schedule/" local="134150738669589835" remote="134151781200000000" Dst="1" />
+<file name="014_aloha_employees_stage.sql" server="66.29.132.156/schedule/" local="134150739554289659" remote="134151781200000000" Dst="1" />
+<file name="015_aloha_labor_punches_stage.sql" server="66.29.132.156/schedule/" local="134150740898377068" remote="134151781200000000" Dst="1" />
+<file name="016_aloha_sales_daily_stage.sql" server="66.29.132.156/schedule/" local="134150741410181770" remote="134151781200000000" Dst="1" />
+<file name="017_job_logs.sql" server="66.29.132.156/schedule/" local="134150777621804909" remote="134151781200000000" Dst="1" />
+<file name="018_job_logs.sql" server="66.29.132.156/schedule/" local="134150777243065387" remote="134151781200000000" Dst="1" />
+<file name="019_job_logs.sql" server="66.29.132.156/schedule/" local="134150778166139488" remote="134151781200000000" Dst="1" />
+<file name="020_job_logs.sql" server="66.29.132.156/schedule/" local="134150798802976696" remote="134151781200000000" Dst="1" />
+<file name="021_job_logs.sql" server="66.29.132.156/schedule/" local="134150799881909568" remote="134151781200000000" Dst="1" />
+<file name="022_job_logs.sql" server="66.29.132.156/schedule/" local="134150800472881821" remote="134151781200000000" Dst="1" />
+<file name="023_job_logs.sql" server="66.29.132.156/schedule/" local="134150831428766925" remote="134151781200000000" Dst="1" />
+<file name="024_job_logs.sql" server="66.29.132.156/schedule/" local="134150831896123194" remote="134151781200000000" Dst="1" />
+<file name="025_job_logs.sql" server="66.29.132.156/schedule/" local="134150832411404572" remote="134151781200000000" Dst="1" />
+<file name="026_job_logs.sql" server="66.29.132.156/schedule/" local="134150832941212302" remote="134151781200000000" Dst="1" />
+<file name="027_job_logs.sql" server="66.29.132.156/schedule/" local="134150833414478527" remote="134151781200000000" Dst="1" />
+<file name="028_job_logs.sql" server="66.29.132.156/schedule/" local="134150835972891111" remote="134151781200000000" Dst="1" />
+<file name="029_job_logs.sql" server="66.29.132.156/schedule/" local="134150836394283889" remote="134151781200000000" Dst="1" />
+<file name="030_job_logs.sql" server="66.29.132.156/schedule/" local="134150836819501195" remote="134151781200000000" Dst="1" />
+<file name="032_job_logs.sql" server="66.29.132.156/schedule/" local="134150837866699663" remote="134151781200000000" Dst="1" />
+<file name="031_job_logs.sql" server="66.29.132.156/schedule/" local="134150837406674038" remote="134151781200000000" Dst="1" />
+<file name="033_job_logs.sql" server="66.29.132.156/schedule/" local="134150853467174926" remote="134151781200000000" Dst="1" />
+<file name="034_job_logs.sql" server="66.29.132.156/schedule/" local="134150895833236979" remote="134151781200000000" Dst="1" />
+<file name="035_job_logs.sql" server="66.29.132.156/schedule/" local="134150896486524853" remote="134151781200000000" Dst="1" />
+<file name="036_job_logs.sql" server="66.29.132.156/schedule/" local="134150897119100128" remote="134151781200000000" Dst="1" />
+<file name="037_job_logs.sql" server="66.29.132.156/schedule/" local="134150897940683882" remote="134151781200000000" Dst="1" />
+<file name="09_codex_review.md.txt" server="66.29.132.156/schedule/" local="134150665401039479" remote="134151781200000000" Dst="1" />
+</dwsync>

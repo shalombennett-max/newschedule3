@@ -1,0 +1,159 @@
+You are Codex working in this repository.
+
+READ FIRST:
+- Follow AGENTS.md strictly.
+- Preserve premium UI system (schedule.css and shared UI includes).
+- Do NOT refactor working logic.
+- This task is packaging + onboarding + demo tooling + docs, not core logic changes.
+
+GOAL:
+Make the scheduling module “ready to sell” and easy to deploy:
+1) Setup Wizard (first-run) so new restaurants can start scheduling in minutes
+2) Demo Mode + seed data (optional, safe)
+3) Sales/Compare page (feature matrix + proof artifacts)
+4) Deployment checklist for shared hosting + cron + storage hardening
+5) Zero future styling rework — use existing UI components everywhere
+
+SCOPE:
+- Add new files under /schedule, /docs, /scripts (or /tools)
+- Minimal surgical edits to add nav links
+- Add migrations only if needed (additive only)
+
+========================================================
+1) SETUP WIZARD (FIRST-RUN EXPERIENCE)
+========================================================
+Create: /schedule/setup.php (manager-only)
+
+Purpose:
+- Detect if scheduling is “not configured” for this restaurant:
+  - no roles exist OR no policy set exists OR permissions missing
+- Provide a guided setup:
+  Step 1: Confirm restaurant timezone (store in an existing settings table if present;
+          otherwise create a tiny table schedule_settings).
+  Step 2: Create default roles/stations (FOH/BOH templates):
+          - Server, Host, Bartender, Expo, Runner, Dishwasher, Line Cook, Prep Cook, Manager
+          User can add/remove.
+  Step 3: Create default policy set (rules engine) and set as default
+  Step 4: Grant schedule permissions:
+          - make current user a schedule manager for this restaurant
+  Step 5: Optional: enable Aloha integration mode (CSV import) and show link
+
+Requirements:
+- Must not crash if settings tables are missing.
+- Use CSRF on forms.
+- Premium UI using schedule.css.
+- Do not assume global admin; just restaurant scope.
+
+If a settings table does not exist, add migration:
+- /migrations/031_schedule_settings.sql
+schedule_settings:
+  - id PK
+  - restaurant_id unique
+  - timezone varchar(64) default 'America/New_York'
+  - demo_mode tinyint default 0
+  - created_at datetime
+
+========================================================
+2) DEMO MODE + SEED DATA (SAFE, OPTIONAL)
+========================================================
+Create:
+- /docs/DEMO_MODE.md
+- /scripts/seed_schedule_demo.php  (CLI and/or web-trigger safe)
+- Optional: /migrations/032_demo_seed_optional.sql (ONLY if your repo uses migrations for seed; otherwise script only)
+
+Demo mode rules:
+- Demo mode must be PER-RESTAURANT (schedule_settings.demo_mode=1).
+- The seed script should:
+  - Create a few roles if missing
+  - Create a few staff members ONLY if safe:
+    - If staff_members schema is uncertain, do NOT insert there.
+    - Instead create demo staff in a new table schedule_demo_staff and map internally only for demo.
+  - Create 2 weeks of shifts (some open shifts)
+  - Create 1–2 time-off requests
+  - Create 1 announcement
+  - Create 1 callout and 1 pending pickup request if those tables exist
+- Add “Reset Demo Data” option (danger confirm) that deletes only demo-tagged rows for that restaurant.
+
+Implementation approach:
+- Add a column is_demo tinyint default 0 to your schedule-owned tables ONLY IF safe and additive.
+  If altering many tables is risky, use a separate demo_tag table:
+  - demo_tags: restaurant_id, entity_type, entity_id
+  and delete based on tags.
+Prefer minimal-risk approach.
+
+========================================================
+3) SALES/COMPARE PAGE (PROOF + MATRIX)
+========================================================
+Create: /schedule/compare.php (manager-only; or owner-only if roles exist)
+
+This is NOT a marketing lie page; it is a structured checklist:
+- Section A: “Core Scheduling Parity” (templates, swaps, time-off, messaging, notifications, labor actuals)
+- Section B: “Better Than Typical Schedulers” (quality score, marketplace, triggers, compliance dashboard, punch exceptions)
+- Section C: “Proof” buttons/links:
+  - link to Compliance page, Quality score, Labor actuals, Notifications
+  - show counts for last 7 days: swaps, callouts, pickup approvals, violations (if tables exist)
+
+Comparison matrix design:
+- Columns:
+  - HospiEdge Scheduler (Yes)
+  - Typical Scheduling Tools (Often / Sometimes / Rarely)
+DO NOT name specific competitors to avoid inaccurate claims.
+Keep text conservative and factual:
+- “Quality score tied to compliance + audits” -> Rarely
+- “Incident/temp triggers to staffing actions” -> Rarely
+- “Audit-ready compliance evidence pack” -> Rarely
+If unsure, label as “Differentiator” instead of claiming competitor absence.
+
+Premium UI requirement.
+
+========================================================
+4) DEPLOYMENT CHECKLIST (Namecheap shared hosting friendly)
+========================================================
+Create docs:
+- /docs/DEPLOY_schedule_checklist.md
+Include:
+- Required PHP version notes (whatever repo uses)
+- Running migrations (phpMyAdmin instructions)
+- Cron setup:
+  - run jobs/worker.php every 5 minutes
+  - optional manual run_once
+- Storage hardening:
+  - where CSV uploads are stored
+  - ensure folder is not executable and not publicly browsable
+  - include .htaccess deny rules if Apache
+Create:
+- /storage/imports/.htaccess (if Apache) with Deny from all or equivalent.
+If Nginx environment is possible, document alternative.
+
+========================================================
+5) FINAL NAV + UX TOUCHES (NO RESTYLE)
+========================================================
+- Add links (manager-only) in schedule nav:
+  - Setup
+  - Compare
+  - Jobs (if jobs admin exists)
+- Add a small “System Status” card somewhere (Setup or Compare):
+  - Cron worker last run time (if stored)
+  - Aloha enabled yes/no
+  - Demo mode yes/no
+If no “last run time” exists, add in schedule_settings:
+  - last_worker_run_at datetime nullable
+and update in worker.php when it runs successfully (tiny edit).
+
+========================================================
+6) VERIFICATION (REQUIRED)
+========================================================
+- php -l on every new/edited PHP file.
+- Manual checks:
+  - setup.php runs on empty DB and creates defaults safely
+  - compare.php loads and shows feature checklist and proof links
+  - demo seed can run (or is safely blocked if schema unknown)
+  - deploy checklist is accurate for this repo structure
+  - storage folder is protected (not web accessible)
+
+STOP CONDITION:
+- Setup wizard exists and gets a new restaurant ready fast.
+- Demo mode exists and is safe (no breaking assumptions).
+- Compare page exists and is conservative + helpful.
+- Deployment checklist exists.
+- Premium UI preserved; no unrelated refactors.

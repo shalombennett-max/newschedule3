@@ -1,0 +1,185 @@
+You are Codex working in this repository.
+
+READ FIRST:
+- Follow AGENTS.md strictly.
+- Preserve premium UI (schedule.css etc).
+- Do NOT refactor existing working scheduling logic.
+- This task adds a background job queue so heavy work (imports/sync) runs via cron safely.
+
+GOAL:
+Implement a lightweight job queue system designed for shared hosting:
+- enqueue jobs quickly from web requests
+- process jobs in a cron runner (every 5 minutes or manual trigger)
+- locking to prevent two workers running the same job
+- retries with backoff
+- job logs + basic admin view
+Then wire Aloha import processing to run through the queue (so uploading/mapping stays fast).
+
+SCOPE:
+- Add new DB migration(s)
+- Add new files under /jobs (or /cron)
+- Add a small jobs admin page under /integrations (optional but recommended)
+- Small surgical edits in /schedule/api.php and /integrations/aloha.php to enqueue rather than process inline
+- No unrelated refactors
+
+========================================================
+1) DATABASE: JOB QUEUE TABLES
+========================================================
+Create migration files:
+- /migrations/017_job_queue.sql
+- /migrations/018_job_logs.sql
+- /migrations/019_job_locks.sql
+
+Tables:
+
+A) job_queue
+- id PK
+- restaurant_id nullable (some jobs global)
+- job_type varchar(64) NOT NULL  (e.g. 'aloha_process_batch', 'aloha_rebuild_mappings')
+- payload_json TEXT NOT NULL
+- status enum('queued','running','succeeded','failed','cancelled') NOT NULL default 'queued'
+- priority int NOT NULL default 100 (lower = higher priority)
+- run_after datetime NOT NULL default CURRENT_TIMESTAMP
+- attempts int NOT NULL default 0
+- max_attempts int NOT NULL default 5
+- last_error TEXT nullable
+- created_by int nullable
+- created_at datetime
+- started_at datetime nullable
+- finished_at datetime nullable
+Indexes:
+- (status, run_after, priority)
+- (restaurant_id, status, run_after)
+
+B) job_logs
+- id PK
+- job_id
+- log_level enum('info','warn','error') default 'info'
+- message text
+- created_at datetime
+Indexes:
+- (job_id, created_at)
+
+C) job_locks
+- lock_key varchar(128) PK   (e.g. 'job_worker_global', 'aloha_batch_123')
+- locked_at datetime
+- expires_at datetime
+- owner varchar(64) nullable
+Purpose: prevent concurrent workers and prevent duplicate batch processing.
+
+All tables InnoDB utf8mb4.
+
+========================================================
+2) JOB QUEUE LIBRARY (PHP)
+========================================================
+Create:
+- /jobs/job_lib.php
+
+Functions:
+- jq_enqueue(PDO $pdo, string $jobType, array $payload, int $priority=100, ?int $restaurantId=null, ?int $createdBy=null, int $delaySeconds=0): int
+- jq_log(PDO $pdo, int $jobId, string $level, string $message): void
+- jq_acquire_lock(PDO $pdo, string $lockKey, int $ttlSeconds=240, string $owner='worker'): bool
+- jq_release_lock(PDO $pdo, string $lockKey): void
+
+Notes:
+- Use prepared statements only.
+- Lock acquisition should be atomic:
+  - If lock_key exists and expires_at > now => fail
+  - Else insert/replace with new expires_at
+- Keep it simple and safe.
+
+========================================================
+3) CRON WORKER
+========================================================
+Create:
+- /jobs/worker.php  (CLI entrypoint, safe to run via cron)
+- /jobs/run_once.php (optional: for web manual trigger, manager-only, heavily locked)
+
+Worker behavior:
+- Acquire a global lock 'job_worker_global' (ttl ~240s). If can't, exit.
+- Fetch up to N jobs (e.g. 10) where:
+  status='queued' AND run_after <= NOW()
+  ordered by priority asc, id asc
+- For each job:
+  - set status='running', started_at=NOW(), attempts += 1
+  - call the handler based on job_type
+  - on success: status='succeeded', finished_at=NOW()
+  - on failure:
+    - status back to 'queued' if attempts < max_attempts, else 'failed'
+    - set last_error
+    - set run_after to NOW() + backoff (e.g. attempts^2 minutes)
+- Always release global lock.
+
+Handlers to implement NOW:
+- job_type='aloha_process_batch'
+  payload: { "batch_id": 123, "restaurant_id": 5, "import_type":"employees|labor|sales" }
+  The handler should:
+   - load batch row (aloha_import_batches) and confirm status is uploaded/mapped (or appropriate)
+   - process CSV into stage tables using the SAME logic as current inline processor
+   - update aloha_import_batches.status to 'processed' (or 'failed') with summary + errors
+   - write job_logs events for progress
+
+IMPORTANT:
+- Make processing idempotent:
+  - If batch is already processed, handler should succeed quickly and do nothing.
+  - If re-processing is allowed, clear stage rows for that batch_id before re-inserting.
+
+========================================================
+4) WIRE ALOHA IMPORT TO QUEUE
+========================================================
+Modify /integrations/aloha.php and/or /schedule/api.php Aloha actions:
+- Keep upload + header mapping step synchronous (fast).
+- Replace any heavy CSV parsing inside a web request with:
+  - enqueue aloha_process_batch job
+  - mark batch status 'uploaded' or 'mapped'
+  - return UI message: "Import queued—check Recent Imports in a moment."
+- Add API action:
+  - action=aloha_queue_process_batch (manager-only, CSRF required)
+    - enqueues job and returns job_id
+
+Also add "Run Now" button in UI (manager-only) that:
+- calls /jobs/run_once.php which:
+  - acquires lock
+  - runs worker for 1–2 jobs max
+  - returns summary JSON
+This is for environments where cron isn't set up yet.
+
+========================================================
+5) JOBS ADMIN VIEW (recommended)
+========================================================
+Create:
+- /integrations/jobs.php
+
+Manager-only page:
+- shows last 50 jobs (queued/running/failed)
+- filter by status and job_type
+- shows last_error, attempts, created_at, run_after
+- button:
+  - retry failed job (sets status=queued, run_after=NOW())
+  - cancel queued job
+
+All actions CSRF protected and handled via /schedule/api.php OR a new /integrations/api.php.
+Prefer keeping it minimal and safe.
+
+========================================================
+6) VERIFICATION (REQUIRED)
+========================================================
+1) php -l on all new/edited PHP files.
+2) Manual test:
+- Upload an Aloha CSV batch; ensure UI returns quickly and batch shows "queued".
+- Run worker manually:
+  - php /path/to/jobs/worker.php
+  OR hit the Run Now button (run_once.php) if implemented.
+- Confirm:
+  - stage tables populated
+  - batch status becomes 'processed'
+  - job shows 'succeeded'
+- Test a failure:
+  - upload an invalid CSV mapping to force errors
+  - confirm job retries then marks failed and logs last_error.
+
+STOP CONDITION:
+- Jobs queue + worker works.
+- Aloha batch processing can run via queue without blocking web request.
+- Admin view exists or minimal visibility is provided via Recent Imports + job logs.
+- Premium UI preserved. No unrelated refactors.
