@@ -1,0 +1,54 @@
+:root {
+    color-scheme: light;
+}
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f8fafc;
+    color: #111827;
+}
+header {
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 0.75rem;
+}
+h1 {
+    margin: 0 0 0.5rem;
+    font-size: 1.25rem;
+}
+main {
+    padding: 0.75rem;
+}
+.schedule-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.schedule-nav a {
+    text-decoration: none;
+    color: #1d4ed8;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid #bfdbfe;
+    border-radius: 0.35rem;
+    background: #eff6ff;
+}
+.schedule-nav a.active {
+    background: #1d4ed8;
+    color: #ffffff;
+    border-color: #1d4ed8;
+}
+.week-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.button {
+    text-decoration: none;
+    padding: 0.45rem 0.65rem;
+    border-radius: 0.35rem;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    color: #111827;
+}
