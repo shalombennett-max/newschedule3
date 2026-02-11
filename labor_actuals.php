@@ -75,6 +75,24 @@ foreach ($actualRows as $row) {
 $mappedEmployeeCount = (int)(schedule_fetch_one('SELECT COUNT(*) AS c FROM pos_mappings WHERE restaurant_id=:restaurant_id AND provider="aloha" AND type="employee"', [':restaurant_id' => $resId])['c'] ?? 0);
 $laborRowsCount = (int)(schedule_fetch_one('SELECT COUNT(*) AS c FROM aloha_labor_punches_stage WHERE restaurant_id=:restaurant_id', [':restaurant_id' => $resId])['c'] ?? 0);
 
+$enforcementEvents = schedule_fetch_all(
+    'SELECT id,event_type,staff_id,shift_id,event_dt,message FROM schedule_enforcement_events
+     WHERE restaurant_id=:restaurant_id AND event_dt >= :start_dt AND event_dt < :end_dt
+     ORDER BY event_dt DESC',
+    [':restaurant_id' => $resId, ':start_dt' => $startDt, ':end_dt' => $endDt]
+);
+$exceptionFilter = (string)($_GET['exception_type'] ?? 'all');
+if ($exceptionFilter !== 'all') {
+    $enforcementEvents = array_values(array_filter($enforcementEvents, static function(array $row) use ($exceptionFilter): bool {
+        return (string)($row['event_type'] ?? '') === $exceptionFilter;
+    }));
+}
+$exceptionCounts = [];
+foreach ($enforcementEvents as $eventRow) {
+    $key = (string)($eventRow['event_type'] ?? 'unknown');
+    $exceptionCounts[$key] = ($exceptionCounts[$key] ?? 0) + 1;
+}
+
 $staffIds = array_values(array_unique(array_merge(array_keys($scheduledByStaff), array_keys($actualByStaff))));
 sort($staffIds);
 
@@ -109,6 +127,31 @@ schedule_page_start('Scheduled vs Actual Labor', 'labor_actuals');
                 <?php endforeach; ?>
                 </tbody>
             </table>
+        </article>
+
+
+        <article class="card">
+            <h3>Punch Exceptions</h3>
+            <form class="api-form" data-success="Enforcement events regenerated." method="post" action="/schedule/api.php">
+                <input type="hidden" name="action" value="generate_enforcement_events">
+                <input type="hidden" name="week_start" value="<?= htmlspecialchars($week['start'], ENT_QUOTES, 'UTF-8') ?>">
+                <button class="button" type="submit">Generate Enforcement Events</button>
+            </form>
+            <p>
+                <a class="button" href="?week_start=<?= htmlspecialchars($week['start'], ENT_QUOTES, 'UTF-8') ?>&exception_type=all">All</a>
+                <a class="button" href="?week_start=<?= htmlspecialchars($week['start'], ENT_QUOTES, 'UTF-8') ?>&exception_type=unscheduled_punch">Unscheduled</a>
+                <a class="button" href="?week_start=<?= htmlspecialchars($week['start'], ENT_QUOTES, 'UTF-8') ?>&exception_type=early_punch">Early</a>
+                <a class="button" href="?week_start=<?= htmlspecialchars($week['start'], ENT_QUOTES, 'UTF-8') ?>&exception_type=late_punch">Late</a>
+            </p>
+            <p><?= count($enforcementEvents) ?> total exception events for this week.</p>
+            <?php if ($enforcementEvents === []): ?><p class="empty-state">No punch exceptions detected.</p><?php endif; ?>
+            <?php foreach ($enforcementEvents as $event): ?>
+                <div class="card">
+                    <p><strong><?= htmlspecialchars((string)$event['event_type'], ENT_QUOTES, 'UTF-8') ?></strong> • <?= htmlspecialchars((string)$event['event_dt'], ENT_QUOTES, 'UTF-8') ?></p>
+                    <p><?= htmlspecialchars((string)$event['message'], ENT_QUOTES, 'UTF-8') ?></p>
+                    <p>Staff: <?= htmlspecialchars($staffNames[(int)$event['staff_id']] ?? ('Staff #' . (int)$event['staff_id']), ENT_QUOTES, 'UTF-8') ?><?php if (!empty($event['shift_id'])): ?> • Shift #<?= (int)$event['shift_id'] ?><?php endif; ?></p>
+                </div>
+            <?php endforeach; ?>
         </article>
 
         <article class="card">

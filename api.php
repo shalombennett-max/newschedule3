@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/_common.php';
+require_once __DIR__ . '/schedule/rules_engine.php';
 schedule_require_auth(true);
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
@@ -73,6 +74,27 @@ function schedule_table_has_columns(string $tableName, array $requiredColumns): 
     } catch (Throwable $e) {
         return false;
     }
+}
+
+
+function schedule_compliance_for_shift(int $restaurantId, array $shift): array {
+    $pdo = schedule_get_pdo();
+    if (!$pdo instanceof PDO || !se_table_exists($pdo, 'schedule_policy_sets') || !se_table_exists($pdo, 'schedule_policies')) {
+        return ['warnings' => [], 'blockers' => []];
+    }
+    $policySetId = se_get_active_policy_set_id($pdo, $restaurantId);
+    $policies = se_load_policies($pdo, $restaurantId, $policySetId);
+    $violations = se_check_shift($pdo, $restaurantId, $shift, $policies);
+    $warnings = [];
+    $blockers = [];
+    foreach ($violations as $v) {
+        if (($v['severity'] ?? 'warn') === 'block') {
+            $blockers[] = $v;
+        } else {
+            $warnings[] = $v;
+        }
+    }
+    return ['warnings' => $warnings, 'blockers' => $blockers];
 }
 
 function notify_user(PDO $pdo, int $restaurantId, int $userId, string $type, string $title, string $body, ?string $linkUrl = null): void {
@@ -242,6 +264,22 @@ if ($action === 'create_shift' || $action === 'update_shift') {
         schedule_json_error('Staff has approved time off during this shift.', 422);
     }
 
+    $complianceWarnings = [];
+    if ($staffId !== null) {
+        $compliance = schedule_compliance_for_shift($resId, [
+            'id' => $shiftId,
+            'staff_id' => $staffId,
+            'start_dt' => $startDt,
+            'end_dt' => $endDt,
+            'break_minutes' => max(0, (int)($_POST['break_minutes'] ?? ($current['break_minutes'] ?? 0))),
+        ]);
+        if ($compliance['blockers'] !== []) {
+            $first = $compliance['blockers'][0]['message'] ?? 'Blocking policy violation.';
+            schedule_json_error_with_details((string)$first, 422, ['violations' => $compliance['blockers']]);
+        }
+        $complianceWarnings = $compliance['warnings'];
+    }
+
     $pdo = schedule_get_pdo();
     if (!$pdo instanceof PDO) {
         schedule_json_error('Database unavailable.', 500);
@@ -262,7 +300,7 @@ if ($action === 'create_shift' || $action === 'update_shift') {
         if ($staffId !== null) {
             notify_user($pdo, $resId, $staffId, 'shift_changed', 'Shift updated', 'Your shift details were updated.', '/my.php?week_start=' . substr($startDt, 0, 10));
         }
-        schedule_json_success(['message' => 'Shift updated.']);
+        schedule_json_success(['message' => 'Shift updated.', 'warnings' => $complianceWarnings]);
     }
 
     schedule_execute('INSERT INTO shifts (restaurant_id,staff_id,role_id,start_dt,end_dt,break_minutes,notes,status)
@@ -278,7 +316,7 @@ if ($action === 'create_shift' || $action === 'update_shift') {
     if ($staffId !== null) {
         notify_user($pdo, $resId, $staffId, 'shift_assigned', 'New shift assigned', 'You were assigned a new shift.', '/my.php?week_start=' . substr($startDt, 0, 10));
     }
-    schedule_json_success(['message' => 'Shift created.']);
+    schedule_json_success(['message' => 'Shift created.', 'warnings' => $complianceWarnings]);
 }
 
 if ($action === 'delete_shift') {
@@ -298,13 +336,51 @@ if ($action === 'publish_week') {
         schedule_json_error('week_start is required.', 422);
     }
     $weekEnd = (new DateTimeImmutable($weekStart))->modify('+7 days')->format('Y-m-d');
+
+    $pdo = schedule_get_pdo();
+    $weekViolations = [];
+    $blockers = [];
+    $warnings = [];
+    if ($pdo instanceof PDO && se_table_exists($pdo, 'schedule_policy_sets') && se_table_exists($pdo, 'schedule_policies')) {
+        $policySetId = se_get_active_policy_set_id($pdo, $resId);
+        $policies = se_load_policies($pdo, $resId, $policySetId);
+        $weekViolations = se_check_week($pdo, $resId, $weekStart, $policies);
+        foreach ($weekViolations as $v) {
+            if (($v['severity'] ?? 'warn') === 'block') {
+                $blockers[] = $v;
+            } else {
+                $warnings[] = $v;
+            }
+        }
+
+        if (se_table_exists($pdo, 'schedule_violations')) {
+            schedule_execute('DELETE FROM schedule_violations WHERE restaurant_id=:restaurant_id AND week_start_date=:week_start_date', [':restaurant_id' => $resId, ':week_start_date' => $weekStart]);
+            foreach ($weekViolations as $v) {
+                schedule_execute('INSERT INTO schedule_violations (restaurant_id, week_start_date, shift_id, staff_id, policy_key, severity, message, details_json, created_at)
+                                  VALUES (:restaurant_id, :week_start_date, :shift_id, :staff_id, :policy_key, :severity, :message, :details_json, NOW())', [
+                    ':restaurant_id' => $resId,
+                    ':week_start_date' => $weekStart,
+                    ':shift_id' => (int)($v['shift_id'] ?? 0) ?: null,
+                    ':staff_id' => (int)($v['staff_id'] ?? 0) ?: null,
+                    ':policy_key' => (string)($v['policy_key'] ?? ''),
+                    ':severity' => (string)($v['severity'] ?? 'warn'),
+                    ':message' => substr((string)($v['message'] ?? 'Policy violation'), 0, 255),
+                    ':details_json' => json_encode($v['details'] ?? [], JSON_UNESCAPED_SLASHES),
+                ]);
+            }
+        }
+    }
+
+    if ($blockers !== []) {
+        schedule_json_error_with_details('Publish blocked by compliance rules.', 422, ['blockers' => $blockers, 'warnings' => $warnings]);
+    }
+
     schedule_execute('UPDATE shifts SET status="published" WHERE restaurant_id=:restaurant_id AND start_dt >= :week_start AND start_dt < :week_end AND status != "deleted"', [
         ':restaurant_id' => $resId,
         ':week_start' => $weekStart . ' 00:00:00',
         ':week_end' => $weekEnd . ' 00:00:00',
     ]);
 
-    $pdo = schedule_get_pdo();
     if ($pdo instanceof PDO) {
         $assigned = schedule_fetch_all(
             'SELECT DISTINCT staff_id FROM shifts WHERE restaurant_id=:restaurant_id AND status="published" AND start_dt >= :week_start AND start_dt < :week_end AND staff_id IS NOT NULL',
@@ -314,7 +390,7 @@ if ($action === 'publish_week') {
             notify_user($pdo, $resId, (int)$row['staff_id'], 'schedule_published', 'Schedule published', 'Your upcoming schedule is now published.', '/my.php?week_start=' . $weekStart);
         }
     }
-    schedule_json_success(['message' => 'Week published.']);
+    schedule_json_success(['message' => 'Week published.', 'warnings' => $warnings]);
 }
 
 if ($action === 'mark_shift_open') {
@@ -407,6 +483,16 @@ if ($action === 'approve_pickup') {
     $staffId = (int)$request['staff_id'];
     if (schedule_has_overlap($resId, $staffId, (string)$shift['start_dt'], (string)$shift['end_dt']) || schedule_has_time_off_conflict($resId, $staffId, (string)$shift['start_dt'], (string)$shift['end_dt'])) {
         schedule_json_error('Staff is no longer eligible for this shift.', 422);
+    }
+    $pickupCompliance = schedule_compliance_for_shift($resId, [
+        'id' => (int)$shift['id'],
+        'staff_id' => $staffId,
+        'start_dt' => (string)$shift['start_dt'],
+        'end_dt' => (string)$shift['end_dt'],
+        'break_minutes' => (int)($shift['break_minutes'] ?? 0),
+    ]);
+    if ($pickupCompliance['blockers'] !== []) {
+        schedule_json_error_with_details('Pickup cannot be approved due to blocking policy violations.', 422, ['violations' => $pickupCompliance['blockers']]);
     }
 
     $pdo = schedule_get_pdo();
@@ -679,6 +765,16 @@ if ($action === 'approve_swap_request' || $action === 'deny_swap_request') {
         if (schedule_has_overlap($resId, $targetStaff, (string)$shift['start_dt'], (string)$shift['end_dt'], (int)$shift['id']) || schedule_has_time_off_conflict($resId, $targetStaff, (string)$shift['start_dt'], (string)$shift['end_dt'])) {
             schedule_json_error('Target staff member is no longer eligible.', 422);
         }
+        $swapCompliance = schedule_compliance_for_shift($resId, [
+            'id' => (int)$shift['id'],
+            'staff_id' => $targetStaff,
+            'start_dt' => (string)$shift['start_dt'],
+            'end_dt' => (string)$shift['end_dt'],
+            'break_minutes' => (int)($shift['break_minutes'] ?? 0),
+        ]);
+        if ($swapCompliance['blockers'] !== []) {
+            schedule_json_error_with_details('Swap cannot be approved due to blocking policy violations.', 422, ['violations' => $swapCompliance['blockers']]);
+        }
         schedule_execute('UPDATE shifts SET staff_id=:staff_id WHERE restaurant_id=:restaurant_id AND id=:id', [
             ':staff_id' => $targetStaff,
             ':restaurant_id' => $resId,
@@ -760,6 +856,124 @@ if ($action === 'close_callout') {
     $id = (int)($_POST['callout_id'] ?? 0);
     schedule_execute('UPDATE callouts SET status="manager_closed", updated_at=NOW() WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $id]);
     schedule_json_success(['message' => 'Call-out closed.']);
+}
+
+
+if ($action === 'update_policy_set' || $action === 'reset_policy_set_defaults') {
+    schedule_require_manager_api();
+    $pdo = schedule_get_pdo();
+    if (!$pdo instanceof PDO || !se_table_exists($pdo, 'schedule_policy_sets') || !se_table_exists($pdo, 'schedule_policies')) {
+        schedule_json_error('Policy tables are unavailable.', 500);
+    }
+    $policySetId = (int)($_POST['policy_set_id'] ?? 0);
+    if ($policySetId <= 0) {
+        $policySetId = se_get_active_policy_set_id($pdo, $resId);
+    }
+
+    if ($action === 'reset_policy_set_defaults') {
+        se_reset_policy_set_defaults($pdo, $resId, $policySetId);
+        schedule_json_success(['message' => 'Policy defaults restored.']);
+    }
+
+    $defaults = se_default_policy_config();
+    $rows = $_POST['policies'] ?? [];
+    if (!is_array($rows)) {
+        schedule_json_error('Invalid policy payload.', 422);
+    }
+
+    $pdo->beginTransaction();
+    try {
+        schedule_execute('DELETE FROM schedule_policies WHERE restaurant_id=:restaurant_id AND policy_set_id=:policy_set_id', [':restaurant_id' => $resId, ':policy_set_id' => $policySetId]);
+        foreach ($defaults as $key => $cfg) {
+            $in = is_array($rows[$key] ?? null) ? $rows[$key] : [];
+            $enabled = (int)($in['enabled'] ?? 0) === 1 ? 1 : 0;
+            $mode = ((string)($in['mode'] ?? 'warn')) === 'block' ? 'block' : 'warn';
+            $params = $cfg['params'];
+            foreach ($params as $pk => $pv) {
+                if (isset($in['params'][$pk])) {
+                    $params[$pk] = is_numeric($in['params'][$pk]) ? (0 + $in['params'][$pk]) : $in['params'][$pk];
+                }
+            }
+            schedule_execute('INSERT INTO schedule_policies (restaurant_id, policy_set_id, policy_key, enabled, mode, params_json, created_at)
+                              VALUES (:restaurant_id, :policy_set_id, :policy_key, :enabled, :mode, :params_json, NOW())', [
+                ':restaurant_id' => $resId,
+                ':policy_set_id' => $policySetId,
+                ':policy_key' => $key,
+                ':enabled' => $enabled,
+                ':mode' => $mode,
+                ':params_json' => json_encode($params, JSON_UNESCAPED_SLASHES),
+            ]);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        schedule_json_error('Could not update policy set.', 500);
+    }
+
+    schedule_json_success(['message' => 'Policy set updated.']);
+}
+
+if ($action === 'generate_enforcement_events') {
+    schedule_require_manager_api();
+    $pdo = schedule_get_pdo();
+    if (!$pdo instanceof PDO || !se_table_exists($pdo, 'schedule_enforcement_events')) {
+        schedule_json_error('Enforcement events table unavailable.', 500);
+    }
+    $weekStart = schedule_date((string)($_POST['week_start'] ?? ''), '');
+    if ($weekStart === '') {
+        schedule_json_error('week_start is required.', 422);
+    }
+    $weekEnd = (new DateTimeImmutable($weekStart))->modify('+7 days')->format('Y-m-d');
+    schedule_execute('DELETE FROM schedule_enforcement_events WHERE restaurant_id=:restaurant_id AND event_dt >= :week_start AND event_dt < :week_end', [
+        ':restaurant_id' => $resId,
+        ':week_start' => $weekStart . ' 00:00:00',
+        ':week_end' => $weekEnd . ' 00:00:00',
+    ]);
+
+    $punches = schedule_fetch_all('SELECT l.external_employee_id, pm.internal_id AS staff_id, l.punch_in_dt, l.punch_out_dt
+                                   FROM aloha_labor_punches_stage l
+                                   INNER JOIN pos_mappings pm ON pm.restaurant_id=l.restaurant_id AND pm.provider="aloha" AND pm.type="employee" AND pm.external_id=l.external_employee_id
+                                   WHERE l.restaurant_id=:restaurant_id AND l.punch_in_dt >= :week_start AND l.punch_in_dt < :week_end',
+        [':restaurant_id' => $resId, ':week_start' => $weekStart . ' 00:00:00', ':week_end' => $weekEnd . ' 00:00:00']);
+
+    $count = 0;
+    foreach ($punches as $p) {
+        $staffId = (int)$p['staff_id'];
+        $pin = (string)$p['punch_in_dt'];
+        $match = schedule_fetch_one('SELECT id,start_dt,end_dt FROM shifts WHERE restaurant_id=:restaurant_id AND staff_id=:staff_id AND status != "deleted" AND start_dt <= DATE_ADD(:pin, INTERVAL 30 MINUTE) AND end_dt >= DATE_SUB(:pin, INTERVAL 30 MINUTE) ORDER BY ABS(TIMESTAMPDIFF(MINUTE, start_dt, :pin)) ASC LIMIT 1',
+            [':restaurant_id' => $resId, ':staff_id' => $staffId, ':pin' => $pin]);
+
+        $events = [];
+        if ($match === null) {
+            $events[] = ['unscheduled_punch', null, 'Punch has no matching scheduled shift (+/- 30 min).'];
+        } else {
+            $delta = (int)round((strtotime($pin) - strtotime((string)$match['start_dt'])) / 60);
+            if ($delta < -10) {
+                $events[] = ['early_punch', (int)$match['id'], 'Punch-in is ' . abs($delta) . ' minutes early.'];
+            }
+            if ($delta > 10) {
+                $events[] = ['late_punch', (int)$match['id'], 'Punch-in is ' . $delta . ' minutes late.'];
+            }
+        }
+
+        foreach ($events as [$type, $shiftId, $msg]) {
+            schedule_execute('INSERT INTO schedule_enforcement_events (restaurant_id,event_type,staff_id,shift_id,external_employee_id,event_dt,message,details_json,created_at)
+                              VALUES (:restaurant_id,:event_type,:staff_id,:shift_id,:external_employee_id,:event_dt,:message,:details_json,NOW())', [
+                ':restaurant_id' => $resId,
+                ':event_type' => $type,
+                ':staff_id' => $staffId ?: null,
+                ':shift_id' => $shiftId,
+                ':external_employee_id' => (string)($p['external_employee_id'] ?? ''),
+                ':event_dt' => $pin,
+                ':message' => $msg,
+                ':details_json' => json_encode(['punch_in_dt' => $pin], JSON_UNESCAPED_SLASHES),
+            ]);
+            $count++;
+        }
+    }
+    schedule_json_success(['message' => 'Enforcement events generated.', 'count' => $count]);
 }
 
 schedule_json_error('Unknown action', 404);

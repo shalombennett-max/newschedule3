@@ -152,6 +152,14 @@ function schedule_json_error(string $message, int $code = 422): void
     exit;
 }
 
+function schedule_json_error_with_details(string $message, int $code = 422, array $details = []): void
+{
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['error' => $message, 'details' => $details]);
+    exit;
+}
+
 function schedule_date(string $value, string $default): string
 {
     $dt = DateTime::createFromFormat('Y-m-d', $value);
@@ -193,6 +201,17 @@ function schedule_datetime_from_inputs(string $date, string $time): ?string
         return null;
     }
     return $cleanDate . ' ' . substr($cleanTime, 0, 8);
+}
+
+function schedule_hours_between(string $startDt, string $endDt, int $breakMinutes = 0): float
+{
+    $startTs = strtotime($startDt);
+    $endTs = strtotime($endDt);
+    if ($startTs === false || $endTs === false || $endTs <= $startTs) {
+        return 0.0;
+    }
+    $minutes = max(0, (int)round(($endTs - $startTs) / 60) - max(0, $breakMinutes));
+    return $minutes / 60;
 }
 
 function schedule_staff_options(int $restaurantId): array
@@ -265,6 +284,9 @@ function schedule_nav(string $active): string
 
     if ($isManager) {
         $links['roles'] = ['/roles.php', 'Roles'];
+        $links['rules'] = ['/schedule/rules.php', 'Rules'];
+        $links['compliance'] = ['/schedule/compliance.php', 'Compliance'];
+        $links['labor_actuals'] = ['/schedule/labor_actuals.php', 'Labor Actuals'];
     }
 
     $html = '<nav class="schedule-nav">';

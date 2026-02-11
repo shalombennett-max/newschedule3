@@ -39,8 +39,13 @@
           }
           return json;
         });
-      }).then(function () {
-        showToast(form.getAttribute('data-success') || 'Saved.', false);
+      }).then(function (json) {
+        var payload = (json && json.data) ? json.data : {};
+        var warningText = '';
+        if (payload.warnings && payload.warnings.length) {
+          warningText = ' Warnings: ' + payload.warnings.map(function (w) { return w.message || w.policy_key || 'Policy warning'; }).join(' | ');
+        }
+        showToast((form.getAttribute('data-success') || payload.message || 'Saved.') + warningText, false);
         window.setTimeout(function () {
           window.location.reload();
         }, 400);
