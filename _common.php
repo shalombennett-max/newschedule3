@@ -15,13 +15,13 @@ function schedule_start_session(): void
 function schedule_user_id(): ?int
 {
     $candidate = $_SESSION['user_id'] ?? null;
-    return is_numeric($candidate) ? (int) $candidate : null;
+    return is_numeric($candidate) ? (int)$candidate : null;
 }
 
 function schedule_restaurant_id(): ?int
 {
     $candidate = $_SESSION['res_id'] ?? ($_SESSION['restaurant_id'] ?? null);
-    return is_numeric($candidate) ? (int) $candidate : null;
+    return is_numeric($candidate) ? (int)$candidate : null;
 }
 
 function schedule_current_staff_id(): ?int
@@ -54,12 +54,7 @@ function schedule_require_auth(bool $api = false): void
 
 function schedule_is_manager(): bool
 {
-    $flags = [
-        $_SESSION['is_manager'] ?? null,
-        $_SESSION['is_admin'] ?? null,
-        $_SESSION['can_manage_schedule'] ?? null,
-    ];
-
+    $flags = [$_SESSION['is_manager'] ?? null, $_SESSION['is_admin'] ?? null, $_SESSION['can_manage_schedule'] ?? null];
     foreach ($flags as $flag) {
         if ($flag === true || $flag === 1 || $flag === '1') {
             return true;
@@ -80,7 +75,6 @@ function schedule_require_manager_api(): void
 function schedule_get_pdo(): ?PDO
 {
     static $pdo = false;
-
     if ($pdo instanceof PDO) {
         return $pdo;
     }
@@ -94,12 +88,10 @@ function schedule_get_pdo(): ?PDO
         $pdo = $GLOBALS['pdo'];
         return $pdo;
     }
-
     if (isset($GLOBALS['db']) && $GLOBALS['db'] instanceof PDO) {
         $pdo = $GLOBALS['db'];
         return $pdo;
     }
-
     if (function_exists('db')) {
         $conn = db();
         if ($conn instanceof PDO) {
@@ -120,11 +112,7 @@ function schedule_fetch_all(string $sql, array $params): array
     }
 
     $stmt = $pdo->prepare($sql);
-    if (!$stmt) {
-        return [];
-    }
-
-    if (!$stmt->execute($params)) {
+    if (!$stmt || !$stmt->execute($params)) {
         return [];
     }
 
@@ -184,7 +172,7 @@ function schedule_week_window(?string $weekStart): array
 {
     $today = new DateTimeImmutable('today');
     $defaultStart = $today->modify('monday this week')->format('Y-m-d');
-    $start = schedule_date((string) $weekStart, $defaultStart);
+    $start = schedule_date((string)$weekStart, $defaultStart);
     $startDt = new DateTimeImmutable($start);
     $endDt = $startDt->modify('+6 days');
 
@@ -219,7 +207,7 @@ function schedule_staff_options(int $restaurantId): array
 
     foreach ($rows as $row) {
         if (is_numeric($row['staff_id'] ?? null)) {
-            $staffId = (int) $row['staff_id'];
+            $staffId = (int)$row['staff_id'];
             $options[$staffId] = 'Staff #' . $staffId;
         }
     }
@@ -237,14 +225,42 @@ function schedule_staff_options(int $restaurantId): array
     return $result;
 }
 
+function schedule_badge_html(int $count): string
+{
+    if ($count <= 0) {
+        return '';
+    }
+    return '<span class="badge-chip">' . $count . '</span>';
+}
+
 function schedule_nav(string $active): string
 {
     $isManager = schedule_is_manager();
+    $resId = schedule_restaurant_id();
+    $userId = schedule_user_id();
+
+    $unread = 0;
+    $pendingSwaps = 0;
+    $calloutAlerts = 0;
+    if ($resId !== null && $userId !== null) {
+        $unreadRow = schedule_fetch_one('SELECT COUNT(*) AS c FROM notifications WHERE restaurant_id=:restaurant_id AND user_id=:user_id AND is_read=0', [':restaurant_id' => $resId, ':user_id' => $userId]);
+        $unread = (int)($unreadRow['c'] ?? 0);
+        if ($isManager) {
+            $swapRow = schedule_fetch_one('SELECT COUNT(*) AS c FROM shift_trade_requests WHERE restaurant_id=:restaurant_id AND status="pending"', [':restaurant_id' => $resId]);
+            $calloutRow = schedule_fetch_one('SELECT COUNT(*) AS c FROM callouts WHERE restaurant_id=:restaurant_id AND status IN ("reported","coverage_requested")', [':restaurant_id' => $resId]);
+            $pendingSwaps = (int)($swapRow['c'] ?? 0);
+            $calloutAlerts = (int)($calloutRow['c'] ?? 0);
+        }
+    }
+
     $links = [
-        'index' => ['/index.php', 'Schedule'],
+        'index' => ['/index.php', 'Schedule' . ($isManager ? schedule_badge_html($calloutAlerts) : '')],
         'my' => ['/my.php', 'My Schedule'],
         'availability' => ['/availability.php', 'Availability'],
         'time_off' => ['/time_off.php', 'Time Off'],
+        'notifications' => ['/notifications.php', 'Notifications' . schedule_badge_html($unread)],
+        'announcements' => ['/announcements.php', 'Announcements'],
+        'swaps' => ['/swaps.php', 'Swaps' . ($isManager ? schedule_badge_html($pendingSwaps) : '')],
     ];
 
     if ($isManager) {
@@ -254,7 +270,7 @@ function schedule_nav(string $active): string
     $html = '<nav class="schedule-nav">';
     foreach ($links as $key => [$href, $label]) {
         $class = $key === $active ? ' class="active"' : '';
-        $html .= '<a' . $class . ' href="' . htmlspecialchars($href, ENT_QUOTES, 'UTF-8') . '">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</a>';
+        $html .= '<a' . $class . ' href="' . htmlspecialchars($href, ENT_QUOTES, 'UTF-8') . '">' . $label . '</a>';
     }
     $html .= '</nav>';
 
@@ -271,7 +287,7 @@ function schedule_page_start(string $title, string $active): void
     echo '</head><body>';
     echo '<header><h1>' . htmlspecialchars($title, ENT_QUOTES, 'UTF-8') . '</h1>';
     echo schedule_nav($active);
-    echo '</header><main data-csrf-token="' . htmlspecialchars((string) $csrf, ENT_QUOTES, 'UTF-8') . '">';
+    echo '</header><main data-csrf-token="' . htmlspecialchars((string)$csrf, ENT_QUOTES, 'UTF-8') . '">';
     echo '<div id="toast" class="toast" hidden></div>';
 }
 
