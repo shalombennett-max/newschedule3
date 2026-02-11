@@ -96,7 +96,7 @@ schedule_page_start('Aloha Integration', 'integrations');
         <h2>Aloha Connection</h2>
         <p>Status: <strong><?= $isConnected ? 'Connected' : 'Not Connected' ?></strong></p>
         <p>v1 uses secure CSV import mode for Aloha exports.</p>
-        <form class="api-form" method="post" action="/api.php" data-success="Aloha enabled.">
+        <form class="api-form" method="post" action="/integrations/api.php" data-success="Aloha enabled.">
             <input type="hidden" name="action" value="aloha_enable">
             <button class="button" type="submit">Enable Aloha</button>
         </form>
@@ -106,7 +106,7 @@ schedule_page_start('Aloha Integration', 'integrations');
         <h2>Import Data</h2>
         <div class="card">
             <h3>1) Import Employees CSV</h3>
-            <form class="api-form" method="post" action="/api.php" enctype="multipart/form-data" data-success="Employees CSV uploaded.">
+            <form class="api-form" method="post" action="/integrations/api.php" enctype="multipart/form-data" data-success="Employees CSV uploaded.">
                 <input type="hidden" name="action" value="aloha_upload_csv">
                 <input type="hidden" name="import_type" value="employees">
                 <input type="file" name="csv_file" accept=".csv" required>
@@ -115,7 +115,7 @@ schedule_page_start('Aloha Integration', 'integrations');
         </div>
         <div class="card">
             <h3>2) Import Labor Punches CSV</h3>
-            <form class="api-form" method="post" action="/api.php" enctype="multipart/form-data" data-success="Labor CSV uploaded.">
+            <form class="api-form" method="post" action="/integrations/api.php" enctype="multipart/form-data" data-success="Labor CSV uploaded.">
                 <input type="hidden" name="action" value="aloha_upload_csv">
                 <input type="hidden" name="import_type" value="labor">
                 <input type="file" name="csv_file" accept=".csv" required>
@@ -124,7 +124,7 @@ schedule_page_start('Aloha Integration', 'integrations');
         </div>
         <div class="card">
             <h3>3) Import Sales Daily CSV</h3>
-            <form class="api-form" method="post" action="/api.php" enctype="multipart/form-data" data-success="Sales CSV uploaded.">
+            <form class="api-form" method="post" action="/integrations/api.php" enctype="multipart/form-data" data-success="Sales CSV uploaded.">
                 <input type="hidden" name="action" value="aloha_upload_csv">
                 <input type="hidden" name="import_type" value="sales">
                 <input type="file" name="csv_file" accept=".csv" required>
@@ -136,7 +136,7 @@ schedule_page_start('Aloha Integration', 'integrations');
     <?php if ($selectedBatch !== null): ?>
     <article class="card">
         <h2>Map CSV Fields (Batch #<?= (int)$selectedBatch['id'] ?>, <?= htmlspecialchars((string)$selectedBatch['import_type'], ENT_QUOTES, 'UTF-8') ?>)</h2>
-        <form class="api-form" method="post" action="/api.php" data-success="Mapping saved.">
+        <form class="api-form" method="post" action="/integrations/api.php" data-success="Mapping saved.">
             <input type="hidden" name="action" value="aloha_save_mapping">
             <input type="hidden" name="batch_id" value="<?= (int)$selectedBatch['id'] ?>">
             <?php foreach ($mappingFields[(string)$selectedBatch['import_type']] ?? [] as $fieldKey => $label): ?>
@@ -153,16 +153,20 @@ schedule_page_start('Aloha Integration', 'integrations');
             <?php endforeach; ?>
             <button class="button" type="submit">Save Mapping</button>
         </form>
-        <form class="api-form" method="post" action="/api.php" data-success="Batch processed.">
-            <input type="hidden" name="action" value="aloha_process_batch">
+        <form class="api-form" method="post" action="/integrations/api.php" data-success="Import queued—check Recent Imports in a moment.">
+            <input type="hidden" name="action" value="aloha_queue_process_batch">
             <input type="hidden" name="batch_id" value="<?= (int)$selectedBatch['id'] ?>">
-            <button class="button" type="submit">Process Batch</button>
+            <button class="button" type="submit">Queue Batch Processing</button>
         </form>
     </article>
     <?php endif; ?>
 
     <article class="card">
         <h2>Recent Imports</h2>
+        <p><a class="button" href="/integrations/jobs.php">Open Job Queue</a></p>
+        <form class="api-form" method="post" action="/jobs/run_once.php" data-success="Run once complete.">
+            <button class="button" type="submit">Run Queue Now</button>
+        </form>
         <?php if ($batches === []): ?>
             <p>No imports yet.</p>
         <?php else: ?>
@@ -186,7 +190,7 @@ schedule_page_start('Aloha Integration', 'integrations');
             <p>No employee stage data yet.</p>
         <?php else: ?>
             <?php foreach ($employeeStage as $emp): $external = (string)$emp['external_employee_id']; ?>
-                <form class="api-form card" method="post" action="/api.php" data-success="Employee mapping saved.">
+                <form class="api-form card" method="post" action="/integrations/api.php" data-success="Employee mapping saved.">
                     <input type="hidden" name="action" value="aloha_save_pos_mapping">
                     <input type="hidden" name="mapping_type" value="employee">
                     <input type="hidden" name="external_id" value="<?= htmlspecialchars($external, ENT_QUOTES, 'UTF-8') ?>">
@@ -213,7 +217,7 @@ schedule_page_start('Aloha Integration', 'integrations');
             <p>No labor job codes imported yet.</p>
         <?php else: ?>
             <?php foreach ($jobCodes as $row): $job = (string)$row['job_code']; ?>
-                <form class="api-form card" method="post" action="/api.php" data-success="Role mapping saved.">
+                <form class="api-form card" method="post" action="/integrations/api.php" data-success="Role mapping saved.">
                     <input type="hidden" name="action" value="aloha_save_pos_mapping">
                     <input type="hidden" name="mapping_type" value="role">
                     <input type="hidden" name="external_id" value="<?= htmlspecialchars($job, ENT_QUOTES, 'UTF-8') ?>">
