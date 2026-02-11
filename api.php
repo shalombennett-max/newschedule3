@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/_common.php';
 require_once __DIR__ . '/schedule/rules_engine.php';
+require_once __DIR__ . '/schedule/audit.php';
 schedule_require_auth(true);
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
@@ -181,6 +182,10 @@ if ($action === 'list_roles') {
 
 if ($action === 'create_role') {
     schedule_require_manager_api();
+    $pdo = schedule_get_pdo();
+    if (!$pdo instanceof PDO) {
+        schedule_json_error('Database unavailable.', 500);
+    }
     $name = trim((string)($_POST['name'] ?? ''));
     if ($name === '') {
         schedule_json_error('Role name is required.', 422);
@@ -192,6 +197,7 @@ if ($action === 'create_role') {
         ':sort_order' => (int)($_POST['sort_order'] ?? 0),
         ':is_active' => (int)($_POST['is_active'] ?? 1) === 1 ? 1 : 0,
     ]);
+    schedule_audit_log($pdo, $resId, $userId, 'role_create', 'role', (string)$pdo->lastInsertId(), null, ['name' => $name]);
     schedule_json_success(['message' => 'Role created.']);
 }
 
@@ -240,7 +246,7 @@ if ($action === 'create_shift' || $action === 'update_shift') {
     }
     $current = $shiftId > 0 ? schedule_shift_by_id($resId, $shiftId) : null;
     if ($shiftId > 0 && $current === null) {
-        schedule_json_error('Shift not found.', 422);
+        schedule_json_error('Shift not found.', 404);
     }
 
     $date = schedule_date((string)($_POST['date'] ?? substr((string)($current['start_dt'] ?? ''), 0, 10)), '');
@@ -286,6 +292,7 @@ if ($action === 'create_shift' || $action === 'update_shift') {
     }
 
     if ($shiftId > 0) {
+        $before = $current;
         schedule_execute('UPDATE shifts SET staff_id=:staff_id, role_id=:role_id, start_dt=:start_dt, end_dt=:end_dt, break_minutes=:break_minutes, notes=:notes
                           WHERE restaurant_id=:restaurant_id AND id=:id', [
             ':staff_id' => $staffId,
@@ -300,6 +307,7 @@ if ($action === 'create_shift' || $action === 'update_shift') {
         if ($staffId !== null) {
             notify_user($pdo, $resId, $staffId, 'shift_changed', 'Shift updated', 'Your shift details were updated.', '/my.php?week_start=' . substr($startDt, 0, 10));
         }
+        schedule_audit_log($pdo, $resId, $userId, 'shift_update', 'shift', (string)$shiftId, $before, ['staff_id' => $staffId, 'start_dt' => $startDt, 'end_dt' => $endDt]);
         schedule_json_success(['message' => 'Shift updated.', 'warnings' => $complianceWarnings]);
     }
 
@@ -316,16 +324,23 @@ if ($action === 'create_shift' || $action === 'update_shift') {
     if ($staffId !== null) {
         notify_user($pdo, $resId, $staffId, 'shift_assigned', 'New shift assigned', 'You were assigned a new shift.', '/my.php?week_start=' . substr($startDt, 0, 10));
     }
+    schedule_audit_log($pdo, $resId, $userId, 'shift_create', 'shift', (string)$pdo->lastInsertId(), null, ['staff_id' => $staffId, 'start_dt' => $startDt, 'end_dt' => $endDt]);
     schedule_json_success(['message' => 'Shift created.', 'warnings' => $complianceWarnings]);
 }
 
 if ($action === 'delete_shift') {
     schedule_require_manager_api();
+    $pdo = schedule_get_pdo();
+    if (!$pdo instanceof PDO) {
+        schedule_json_error('Database unavailable.', 500);
+    }
     $shiftId = (int)($_POST['shift_id'] ?? 0);
-    if ($shiftId <= 0 || !schedule_shift_by_id($resId, $shiftId)) {
-        schedule_json_error('Shift not found.', 422);
+    $before = $shiftId > 0 ? schedule_shift_by_id($resId, $shiftId) : null;
+    if ($before === null) {
+        schedule_json_error('Shift not found.', 404);
     }
     schedule_execute('UPDATE shifts SET status="deleted" WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $shiftId]);
+    schedule_audit_log($pdo, $resId, $userId, 'shift_delete', 'shift', (string)$shiftId, $before, ['status' => 'deleted']);
     schedule_json_success(['message' => 'Shift deleted.']);
 }
 
@@ -380,6 +395,9 @@ if ($action === 'publish_week') {
         ':week_start' => $weekStart . ' 00:00:00',
         ':week_end' => $weekEnd . ' 00:00:00',
     ]);
+    if ($pdo instanceof PDO) {
+        schedule_audit_log($pdo, $resId, $userId, 'shift_publish', 'week', $weekStart, null, ['week_start' => $weekStart]);
+    }
 
     if ($pdo instanceof PDO) {
         $assigned = schedule_fetch_all(
@@ -398,7 +416,7 @@ if ($action === 'mark_shift_open') {
     $shiftId = (int)($_POST['shift_id'] ?? 0);
     $shift = $shiftId > 0 ? schedule_shift_by_id($resId, $shiftId) : null;
     if ($shift === null || (string)$shift['status'] === 'deleted') {
-        schedule_json_error('Shift not found.', 422);
+        schedule_json_error('Shift not found.', 404);
     }
     schedule_execute('UPDATE shifts SET staff_id = NULL WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $shiftId]);
     schedule_json_success(['message' => 'Shift marked open.']);
@@ -474,7 +492,7 @@ if ($action === 'approve_pickup') {
     $requestId = (int)($_POST['request_id'] ?? 0);
     $request = schedule_fetch_one('SELECT * FROM shift_pickup_requests WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $requestId]);
     if ($request === null || (string)$request['status'] !== 'pending') {
-        schedule_json_error('Request is no longer pending.', 422);
+        schedule_json_error('Request not found.', 404);
     }
     $shift = schedule_shift_by_id($resId, (int)$request['shift_id']);
     if ($shift === null || !empty($shift['staff_id'])) {
@@ -543,9 +561,13 @@ if ($action === 'deny_pickup') {
     $requestId = (int)($_POST['request_id'] ?? 0);
     $request = schedule_fetch_one('SELECT id,status FROM shift_pickup_requests WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $requestId]);
     if ($request === null || (string)$request['status'] !== 'pending') {
-        schedule_json_error('Request is no longer pending.', 422);
+        schedule_json_error('Request not found.', 404);
     }
     schedule_execute('UPDATE shift_pickup_requests SET status="denied", updated_at=NOW() WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $requestId]);
+    $pdo = schedule_get_pdo();
+    if ($pdo instanceof PDO) {
+        schedule_audit_log($pdo, $resId, $userId, 'pickup_deny', 'pickup_request', (string)$requestId, $request, ['status' => 'denied']);
+    }
     schedule_json_success(['message' => 'Pickup request denied.']);
 }
 
@@ -582,7 +604,7 @@ if ($action === 'review_time_off') {
     }
     $request = schedule_fetch_one('SELECT id,staff_id,status FROM time_off_requests WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $requestId]);
     if ($request === null || (string)$request['status'] !== 'pending') {
-        schedule_json_error('Request not pending.', 422);
+        schedule_json_error('Request not found.', 404);
     }
     schedule_execute('UPDATE time_off_requests SET status=:status, reviewed_by=:reviewed_by, reviewed_at=NOW(), review_note=:review_note WHERE restaurant_id=:restaurant_id AND id=:id', [
         ':status' => $decision,
@@ -737,7 +759,7 @@ if ($action === 'approve_swap_request' || $action === 'deny_swap_request') {
     $id = (int)($_POST['request_id'] ?? 0);
     $request = schedule_fetch_one('SELECT * FROM shift_trade_requests WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $id]);
     if ($request === null || (string)$request['status'] !== 'pending') {
-        schedule_json_error('Swap request not pending.', 422);
+        schedule_json_error('Swap request not found.', 404);
     }
 
     if ($action === 'deny_swap_request') {
@@ -749,6 +771,7 @@ if ($action === 'approve_swap_request' || $action === 'deny_swap_request') {
         $pdo = schedule_get_pdo();
         if ($pdo instanceof PDO) {
             notify_user($pdo, $resId, (int)$request['from_staff_id'], 'swap_denied', 'Swap request denied', 'Your swap request was denied.', '/my.php');
+            schedule_audit_log($pdo, $resId, $userId, 'swap_deny', 'swap_request', (string)$id, $request, ['status' => 'denied']);
         }
         schedule_json_success(['message' => 'Swap request denied.']);
     }
@@ -793,6 +816,7 @@ if ($action === 'approve_swap_request' || $action === 'deny_swap_request') {
         if ($targetStaff !== null) {
             notify_user($pdo, $resId, $targetStaff, 'swap_approved', 'You were assigned a swapped shift', 'A manager approved a swap and assigned you this shift.', '/my.php');
         }
+        schedule_audit_log($pdo, $resId, $userId, 'swap_approve', 'swap_request', (string)$id, $request, ['status' => 'approved']);
     }
     schedule_json_success(['message' => 'Swap request approved.']);
 }

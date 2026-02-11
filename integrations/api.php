@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../_common.php';
 require_once __DIR__ . '/aloha_helpers.php';
 require_once __DIR__ . '/../jobs/job_lib.php';
+require_once __DIR__ . '/../schedule/audit.php';
 
 schedule_require_auth(true);
 
@@ -32,13 +33,21 @@ if (strpos($action, 'aloha_') === 0) {
     schedule_handle_aloha_api($action, $resId, $userId);
 }
 
-schedule_require_manager_api();
-if ($action === 'job_retry') {
+schedule_require_manager_api('integrations');
+if ($action === 'job_retry') {␊
     $jobId = (int)($_POST['job_id'] ?? 0);
     if ($jobId <= 0) {
         schedule_json_error('Invalid job id.', 422);
     }
+    $before = schedule_fetch_one('SELECT id,status,restaurant_id FROM job_queue WHERE id=:id AND (restaurant_id=:restaurant_id OR restaurant_id IS NULL)', [':id' => $jobId, ':restaurant_id' => $resId]);
+    if ($before === null) {
+        schedule_json_error('Job not found.', 404);
+    }
     schedule_execute('UPDATE job_queue SET status="queued", run_after=NOW(), finished_at=NULL WHERE id=:id AND (restaurant_id=:restaurant_id OR restaurant_id IS NULL)', [':id' => $jobId, ':restaurant_id' => $resId]);
+    $pdo = schedule_get_pdo();
+    if ($pdo instanceof PDO) {
+        schedule_audit_log($pdo, $resId, $userId, 'job_retry', 'job', (string)$jobId, $before, ['status' => 'queued']);
+    }
     schedule_json_success(['message' => 'Job queued for retry.']);
 }
 
@@ -47,7 +56,15 @@ if ($action === 'job_cancel') {
     if ($jobId <= 0) {
         schedule_json_error('Invalid job id.', 422);
     }
+    $before = schedule_fetch_one('SELECT id,status,restaurant_id FROM job_queue WHERE id=:id AND (restaurant_id=:restaurant_id OR restaurant_id IS NULL) AND status="queued"', [':id' => $jobId, ':restaurant_id' => $resId]);
+    if ($before === null) {
+        schedule_json_error('Job not found.', 404);
+    }
     schedule_execute('UPDATE job_queue SET status="cancelled", finished_at=NOW() WHERE id=:id AND (restaurant_id=:restaurant_id OR restaurant_id IS NULL) AND status="queued"', [':id' => $jobId, ':restaurant_id' => $resId]);
+    $pdo = schedule_get_pdo();
+    if ($pdo instanceof PDO) {
+        schedule_audit_log($pdo, $resId, $userId, 'job_cancel', 'job', (string)$jobId, $before, ['status' => 'cancelled']);
+    }
     schedule_json_success(['message' => 'Job cancelled.']);
 }
 

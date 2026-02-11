@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/schedule/_auth.php';
+
 function schedule_start_session(): void
 {
     if (session_status() !== PHP_SESSION_ACTIVE) {
@@ -25,8 +27,7 @@ function schedule_restaurant_id(): ?int
 }
 
 function schedule_current_staff_id(): ?int
-{
-    return schedule_user_id();
+@@ -30,69 +32,79 @@ function schedule_current_staff_id(): ?int
 }
 
 function schedule_next_param(): string
@@ -52,9 +53,9 @@ function schedule_require_auth(bool $api = false): void
     exit;
 }
 
-function schedule_is_manager(): bool
-{
-    $flags = [$_SESSION['is_manager'] ?? null, $_SESSION['is_admin'] ?? null, $_SESSION['can_manage_schedule'] ?? null];
+function schedule_is_manager(): bool␊
+{␊
+    $flags = [$_SESSION['is_manager'] ?? null, $_SESSION['is_admin'] ?? null, $_SESSION['can_manage_schedule'] ?? null];␊
     foreach ($flags as $flag) {
         if ($flag === true || $flag === 1 || $flag === '1') {
             return true;
@@ -62,12 +63,22 @@ function schedule_is_manager(): bool
     }
 
     $role = $_SESSION['role'] ?? ($_SESSION['user_role'] ?? null);
-    return is_string($role) && in_array(strtolower($role), ['manager', 'admin', 'owner'], true);
+    if (is_string($role) && in_array(strtolower($role), ['manager', 'admin', 'owner'], true)) {
+        return true;
+    }
+
+    return schedule_has_permission('can_manage_schedule');
 }
 
-function schedule_require_manager_api(): void
+function schedule_can_manage_integrations(): bool
 {
-    if (!schedule_is_manager()) {
+    return schedule_has_permission('can_manage_integrations') || schedule_is_manager();
+}
+
+function schedule_require_manager_api(string $capability = 'schedule'): void
+{
+    $allowed = $capability === 'integrations' ? schedule_can_manage_integrations() : schedule_is_manager();
+    if (!$allowed) {
         schedule_json_error('Forbidden', 403);
     }
 }
@@ -96,201 +107,7 @@ function schedule_get_pdo(): ?PDO
         $conn = db();
         if ($conn instanceof PDO) {
             $pdo = $conn;
-            return $pdo;
-        }
-    }
-
-    $pdo = null;
-    return null;
-}
-
-function schedule_fetch_all(string $sql, array $params): array
-{
-    $pdo = schedule_get_pdo();
-    if (!$pdo instanceof PDO) {
-        return [];
-    }
-
-    $stmt = $pdo->prepare($sql);
-    if (!$stmt || !$stmt->execute($params)) {
-        return [];
-    }
-
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    return is_array($rows) ? $rows : [];
-}
-
-function schedule_fetch_one(string $sql, array $params): ?array
-{
-    $rows = schedule_fetch_all($sql, $params);
-    return $rows[0] ?? null;
-}
-
-function schedule_execute(string $sql, array $params): bool
-{
-    $pdo = schedule_get_pdo();
-    if (!$pdo instanceof PDO) {
-        return false;
-    }
-
-    $stmt = $pdo->prepare($sql);
-    return $stmt ? $stmt->execute($params) : false;
-}
-
-function schedule_json_success($data = []): void
-{
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success' => true, 'data' => $data]);
-    exit;
-}
-
-function schedule_json_error(string $message, int $code = 422): void
-{
-    http_response_code($code);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['error' => $message]);
-    exit;
-}
-
-function schedule_json_error_with_details(string $message, int $code = 422, array $details = []): void
-{
-    http_response_code($code);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['error' => $message, 'details' => $details]);
-    exit;
-}
-
-function schedule_date(string $value, string $default): string
-{
-    $dt = DateTime::createFromFormat('Y-m-d', $value);
-    return ($dt instanceof DateTime && $dt->format('Y-m-d') === $value) ? $value : $default;
-}
-
-function schedule_time_or_null(?string $value): ?string
-{
-    $value = is_string($value) ? trim($value) : '';
-    if ($value === '') {
-        return null;
-    }
-    $dt = DateTime::createFromFormat('H:i', $value);
-    return ($dt instanceof DateTime && $dt->format('H:i') === $value) ? $value . ':00' : null;
-}
-
-function schedule_week_window(?string $weekStart): array
-{
-    $today = new DateTimeImmutable('today');
-    $defaultStart = $today->modify('monday this week')->format('Y-m-d');
-    $start = schedule_date((string)$weekStart, $defaultStart);
-    $startDt = new DateTimeImmutable($start);
-    $endDt = $startDt->modify('+6 days');
-
-    return [
-        'start' => $startDt->format('Y-m-d'),
-        'end' => $endDt->format('Y-m-d'),
-        'label' => $startDt->format('M j, Y') . ' - ' . $endDt->format('M j, Y'),
-        'prev' => $startDt->modify('-7 days')->format('Y-m-d'),
-        'next' => $startDt->modify('+7 days')->format('Y-m-d'),
-    ];
-}
-
-function schedule_datetime_from_inputs(string $date, string $time): ?string
-{
-    $cleanDate = schedule_date($date, '');
-    $cleanTime = schedule_time_or_null($time);
-    if ($cleanDate === '' || $cleanTime === null) {
-        return null;
-    }
-    return $cleanDate . ' ' . substr($cleanTime, 0, 8);
-}
-
-function schedule_hours_between(string $startDt, string $endDt, int $breakMinutes = 0): float
-{
-    $startTs = strtotime($startDt);
-    $endTs = strtotime($endDt);
-    if ($startTs === false || $endTs === false || $endTs <= $startTs) {
-        return 0.0;
-    }
-    $minutes = max(0, (int)round(($endTs - $startTs) / 60) - max(0, $breakMinutes));
-    return $minutes / 60;
-}
-
-function schedule_staff_options(int $restaurantId): array
-{
-    $options = [];
-    $rows = schedule_fetch_all(
-        'SELECT DISTINCT staff_id FROM shifts WHERE restaurant_id = :restaurant_id AND staff_id IS NOT NULL
-         UNION SELECT DISTINCT staff_id FROM staff_availability WHERE restaurant_id = :restaurant_id
-         UNION SELECT DISTINCT staff_id FROM time_off_requests WHERE restaurant_id = :restaurant_id',
-        [':restaurant_id' => $restaurantId]
-    );
-
-    foreach ($rows as $row) {
-        if (is_numeric($row['staff_id'] ?? null)) {
-            $staffId = (int)$row['staff_id'];
-            $options[$staffId] = 'Staff #' . $staffId;
-        }
-    }
-
-    $current = schedule_current_staff_id();
-    if ($current !== null) {
-        $options[$current] = 'Me (#' . $current . ')';
-    }
-
-    ksort($options);
-    $result = [];
-    foreach ($options as $id => $name) {
-        $result[] = ['id' => $id, 'name' => $name];
-    }
-    return $result;
-}
-
-function schedule_badge_html(int $count): string
-{
-    if ($count <= 0) {
-        return '';
-    }
-    return '<span class="badge-chip">' . $count . '</span>';
-}
-
-function schedule_nav(string $active): string
-{
-    $isManager = schedule_is_manager();
-    $resId = schedule_restaurant_id();
-    $userId = schedule_user_id();
-
-    $unread = 0;
-    $pendingSwaps = 0;
-    $calloutAlerts = 0;
-    if ($resId !== null && $userId !== null) {
-        $unreadRow = schedule_fetch_one('SELECT COUNT(*) AS c FROM notifications WHERE restaurant_id=:restaurant_id AND user_id=:user_id AND is_read=0', [':restaurant_id' => $resId, ':user_id' => $userId]);
-        $unread = (int)($unreadRow['c'] ?? 0);
-        if ($isManager) {
-            $swapRow = schedule_fetch_one('SELECT COUNT(*) AS c FROM shift_trade_requests WHERE restaurant_id=:restaurant_id AND status="pending"', [':restaurant_id' => $resId]);
-            $calloutRow = schedule_fetch_one('SELECT COUNT(*) AS c FROM callouts WHERE restaurant_id=:restaurant_id AND status IN ("reported","coverage_requested")', [':restaurant_id' => $resId]);
-            $pendingSwaps = (int)($swapRow['c'] ?? 0);
-            $calloutAlerts = (int)($calloutRow['c'] ?? 0);
-        }
-    }
-
-    $links = [
-        'index' => ['/index.php', 'Schedule' . ($isManager ? schedule_badge_html($calloutAlerts) : '')],
-        'my' => ['/my.php', 'My Schedule'],
-        'availability' => ['/availability.php', 'Availability'],
-        'time_off' => ['/time_off.php', 'Time Off'],
-        'notifications' => ['/notifications.php', 'Notifications' . schedule_badge_html($unread)],
-        'announcements' => ['/announcements.php', 'Announcements'],
-        'swaps' => ['/swaps.php', 'Swaps' . ($isManager ? schedule_badge_html($pendingSwaps) : '')],
-    ];
-
-    if ($isManager) {
-        $links['roles'] = ['/roles.php', 'Roles'];
-        $links['rules'] = ['/schedule/rules.php', 'Rules'];
-        $links['compliance'] = ['/schedule/compliance.php', 'Compliance'];
-        $links['labor_actuals'] = ['/schedule/labor_actuals.php', 'Labor Actuals'];
-    }
-
-    $html = '<nav class="schedule-nav">';
-    foreach ($links as $key => [$href, $label]) {
+@@ -294,26 +306,26 @@ function schedule_nav(string $active): string
         $class = $key === $active ? ' class="active"' : '';
         $html .= '<a' . $class . ' href="' . htmlspecialchars($href, ENT_QUOTES, 'UTF-8') . '">' . $label . '</a>';
     }

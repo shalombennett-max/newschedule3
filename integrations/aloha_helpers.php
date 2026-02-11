@@ -286,8 +286,10 @@ function schedule_aloha_process_batch_job(PDO $pdo, int $restaurantId, int $batc
 
 function schedule_handle_aloha_api(string $action, int $resId, int $userId): void
 {
-    schedule_require_manager_api();
+    schedule_require_manager_api('integrations');
     require_once __DIR__ . '/../jobs/job_lib.php';
+    require_once __DIR__ . '/../schedule/audit.php';
+
     $pdo = schedule_get_pdo();
     if (!$pdo instanceof PDO) {
         schedule_json_error('Database unavailable.', 500);
@@ -304,6 +306,7 @@ function schedule_handle_aloha_api(string $action, int $resId, int $userId): voi
              ON DUPLICATE KEY UPDATE status="enabled", credentials_json=VALUES(credentials_json), updated_at=NOW()',
             [':restaurant_id' => $resId, ':credentials_json' => $credentials]
         );
+        schedule_audit_log($pdo, $resId, $userId, 'aloha_enable', 'integration', 'aloha', null, ['status' => 'enabled']);
         schedule_json_success(['message' => 'Aloha enabled.']);
     }
 
@@ -314,9 +317,66 @@ function schedule_handle_aloha_api(string $action, int $resId, int $userId): voi
         }
         if (!isset($_FILES['csv_file']) || !is_array($_FILES['csv_file'])) {
             schedule_json_error('CSV file is required.', 422);
-@@ -223,204 +393,81 @@ function schedule_handle_aloha_api(string $action, int $resId, int $userId): voi
-        $mapping = array_map(static fn($v): string => trim((string)$v, " \t\n\r\0\x0B"), $mapping);
+        }
 
+        $file = $_FILES['csv_file'];
+        $tmpName = (string)($file['tmp_name'] ?? '');
+        $origName = (string)($file['name'] ?? 'upload.csv');
+        $size = (int)($file['size'] ?? 0);
+        if ($size <= 0 || $size > 5 * 1024 * 1024) {
+            schedule_json_error('CSV file exceeds max size (5MB).', 422);
+        }
+        if (!is_uploaded_file($tmpName)) {
+            schedule_json_error('Invalid uploaded file.', 422);
+        }
+        if (strtolower((string)pathinfo($origName, PATHINFO_EXTENSION)) !== 'csv') {
+            schedule_json_error('Only CSV uploads are allowed.', 422);
+        }
+
+        schedule_execute('INSERT INTO aloha_import_batches (restaurant_id, import_type, original_filename, status, mapping_json, created_by, created_at)
+                          VALUES (:restaurant_id, :import_type, :original_filename, "uploaded", "{}", :created_by, NOW())', [
+            ':restaurant_id' => $resId,
+            ':import_type' => $importType,
+            ':original_filename' => substr($origName, 0, 255),
+            ':created_by' => $userId,
+        ]);
+        $batchId = (int)$pdo->lastInsertId();
+        $dest = schedule_aloha_batch_file_path($batchId);
+        if (!move_uploaded_file($tmpName, $dest)) {
+            schedule_json_error('Failed to store CSV file.', 500);
+        }
+
+        $handle = fopen($dest, 'rb');
+        $headers = $handle ? fgetcsv($handle) : false;
+        if (is_resource($handle)) {
+            fclose($handle);
+        }
+        $headerList = is_array($headers) ? schedule_aloha_normalize_headers($headers) : [];
+        $meta = json_encode(['headers' => $headerList, 'mapping' => new stdClass()], JSON_UNESCAPED_UNICODE);
+        schedule_execute('UPDATE aloha_import_batches SET mapping_json=:mapping_json WHERE restaurant_id=:restaurant_id AND id=:id', [
+            ':mapping_json' => is_string($meta) ? $meta : '{"headers":[],"mapping":{}}',
+            ':restaurant_id' => $resId,
+            ':id' => $batchId,
+        ]);
+        schedule_audit_log($pdo, $resId, $userId, 'aloha_import_upload', 'batch', (string)$batchId, null, ['import_type' => $importType, 'filename' => $origName]);
+        schedule_json_success(['message' => 'CSV uploaded.', 'batch_id' => $batchId, 'headers' => $headerList]);
+    }
+
+    if ($action === 'aloha_save_mapping') {
+        $batchId = (int)($_POST['batch_id'] ?? 0);
+        $mapping = $_POST['mapping'] ?? [];
+        if ($batchId <= 0 || !is_array($mapping)) {
+            schedule_json_error('Invalid mapping payload.', 422);
+        }
+
+        $batch = schedule_fetch_one('SELECT id, import_type, mapping_json FROM aloha_import_batches WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $batchId]);
+        if ($batch === null) {
+            schedule_json_error('Batch not found.', 404);
+        }
+
+        $mapping = array_map(static fn($v): string => trim((string)$v, " 	
+
+\0"), $mapping);
         $err = schedule_aloha_validate_mapping((string)$batch['import_type'], $mapping);
         if ($err !== null) {
             schedule_json_error($err, 422);
@@ -337,13 +397,14 @@ function schedule_handle_aloha_api(string $action, int $resId, int $userId): voi
             ':restaurant_id' => $resId,
             ':id' => $batchId,
         ]);
+        schedule_audit_log($pdo, $resId, $userId, 'aloha_import_mapping', 'batch', (string)$batchId, null, ['mapping_keys' => array_keys($mapping)]);
         schedule_json_success(['message' => 'Mapping saved.']);
     }
 
     if ($action === 'aloha_process_batch' || $action === 'aloha_queue_process_batch') {
-        $batchId = (int)($_POST['batch_id'] ?? 0);␊
-        if ($batchId <= 0) {␊
-            schedule_json_error('Invalid batch.', 422);␊
+        $batchId = (int)($_POST['batch_id'] ?? 0);
+        if ($batchId <= 0) {
+            schedule_json_error('Invalid batch.', 422);
         }
         $batch = schedule_fetch_one('SELECT * FROM aloha_import_batches WHERE restaurant_id=:restaurant_id AND id=:id', [':restaurant_id' => $resId, ':id' => $batchId]);
         if ($batch === null) {
@@ -354,7 +415,6 @@ function schedule_handle_aloha_api(string $action, int $resId, int $userId): voi
         if (!is_array($meta) || !isset($meta['mapping']) || !is_array($meta['mapping'])) {
             schedule_json_error('Save a field mapping before processing.', 422);
         }
-        $mapping = $meta['mapping'];
 
         $jobId = jq_enqueue(
             $pdo,
@@ -369,5 +429,9 @@ function schedule_handle_aloha_api(string $action, int $resId, int $userId): voi
             ':restaurant_id' => $resId,
             ':id' => $batchId,
         ]);
+        schedule_audit_log($pdo, $resId, $userId, 'aloha_import_process', 'batch', (string)$batchId, ['status' => (string)$batch['status']], ['status' => 'queued', 'job_id' => $jobId]);
         schedule_json_success(['job_id' => $jobId, 'message' => 'Import queued—check Recent Imports in a moment.']);
     }
+
+    schedule_json_error('Unknown action.', 422);
+}
