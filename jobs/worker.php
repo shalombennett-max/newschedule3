@@ -10,6 +10,7 @@ function jq_process_jobs(PDO $pdo, int $limit = 10, string $owner = 'worker'): a
     $processed = 0;
     $succeeded = 0;
     $failed = 0;
+    $restaurantIds = [];
 
     $listStmt = $pdo->prepare(
         'SELECT id, restaurant_id, job_type, payload_json, attempts, max_attempts
@@ -24,6 +25,7 @@ function jq_process_jobs(PDO $pdo, int $limit = 10, string $owner = 'worker'): a
 
     foreach ($jobs as $job) {
         $jobId = (int)$job['id'];
+        $restaurantIds[(int)($job['restaurant_id'] ?? 0)] = true;
         $claim = $pdo->prepare(
             'UPDATE job_queue
              SET status="running", started_at=NOW(), attempts=attempts+1, last_error=NULL
@@ -91,7 +93,7 @@ function jq_process_jobs(PDO $pdo, int $limit = 10, string $owner = 'worker'): a
         }
     }
 
-    return ['processed' => $processed, 'succeeded' => $succeeded, 'failed' => $failed];
+    return ['processed' => $processed, 'succeeded' => $succeeded, 'failed' => $failed, 'restaurant_ids' => array_keys($restaurantIds)];
 }
 
 if (PHP_SAPI === 'cli' && realpath((string)($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
@@ -110,6 +112,16 @@ if (PHP_SAPI === 'cli' && realpath((string)($_SERVER['SCRIPT_FILENAME'] ?? '')) 
 
     try {
         $result = jq_process_jobs($pdo, $limit, $owner);
+        if (schedule_table_exists('schedule_settings')) {
+            $ids = array_filter(array_map('intval', (array)($result['restaurant_ids'] ?? [])));
+            foreach ($ids as $restaurantId) {
+                if ($restaurantId <= 0) {
+                    continue;
+                }
+                $stmt = $pdo->prepare('UPDATE schedule_settings SET last_worker_run_at=NOW() WHERE restaurant_id=:restaurant_id');
+                $stmt->execute([':restaurant_id' => $restaurantId]);
+            }
+        }
         fwrite(STDOUT, json_encode($result, JSON_UNESCAPED_UNICODE) . PHP_EOL);
     } finally {
         jq_release_lock($pdo, 'job_worker_global');
